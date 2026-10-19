@@ -1,0 +1,13 @@
+audit/
+tests/
+macos/tests/
+dist/
+release/
+__pycache__/
+*.pyc
+*.log
+*.tgz
+._*
+.DS_Store
+.git/
+.gitignore

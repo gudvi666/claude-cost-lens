@@ -1,0 +1,57 @@
+{
+  "name": "claude-cost-lens",
+  "version": "0.1.0",
+  "description": "Read-only Claude Code cost and token dashboard with a macOS menu bar app and Windows system tray.",
+  "bin": {
+    "claude-cost-lens": "bin/claude-cost-lens.cjs"
+  },
+  "files": [
+    "app.py",
+    "bin/claude-cost-lens.cjs",
+    "bin/menubar.cjs",
+    "bin/windows-tray.cjs",
+    "windows/tray.ps1",
+    "windows/TrayApp.cs",
+    "macos/UsageModels.swift",
+    "macos/MenuBarApp.swift",
+    "macos/MakeIcon.swift",
+    "scripts/build_macos.py",
+    "README.md",
+    "PUBLISHING.md",
+    "docs/ACCOUNTING.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "token-usage",
+    "cost-monitor",
+    "usage-dashboard",
+    "advisor"
+  ],
+  "license": "MIT",
+  "scripts": {
+    "start": "node bin/claude-cost-lens.cjs",
+    "build:mac": "python3 scripts/build_macos.py",
+    "menubar": "node bin/claude-cost-lens.cjs --menubar"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "os": [
+    "darwin",
+    "win32"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gudvi666/claude-cost-lens.git"
+  },
+  "homepage": "https://github.com/gudvi666/claude-cost-lens#readme",
+  "bugs": {
+    "url": "https://github.com/gudvi666/claude-cost-lens/issues"
+  }
+}

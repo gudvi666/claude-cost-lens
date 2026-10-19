@@ -1,0 +1,17 @@
+.DS_Store
+._*
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+node_modules/
+dist/
+release/
+audit/
+*.tgz
+*.log
+.env
+.env.*
+!.env.example
+.npmrc
+.claude/
