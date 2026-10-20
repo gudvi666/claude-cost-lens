@@ -1,6 +1,6 @@
 {
   "name": "claude-cost-lens",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Read-only Claude Code cost and token dashboard with a macOS menu bar app and Windows system tray.",
   "bin": {
     "claude-cost-lens": "bin/claude-cost-lens.cjs"

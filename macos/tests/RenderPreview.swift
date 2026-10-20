@@ -21,6 +21,25 @@ enum RenderPreview {
             store.snapshot = try JSONDecoder().decode(UsageSnapshot.self, from: Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[1])))
             store.updatedAt = Date()
         }
+        if CommandLine.arguments.contains("--quota-live") {
+            store.refreshPlanUsage()
+        } else if !CommandLine.arguments.contains("--quota-missing") {
+            let age: TimeInterval = CommandLine.arguments.contains("--quota-old") ? 86400 : 0
+            let used = CommandLine.arguments.contains("--quota-empty") ? 100 : 24
+            let sample: [String: Any] = ["version": 2, "samples": [
+                ["t": Date().addingTimeInterval(-age).timeIntervalSince1970 * 1000,
+                 "org": "preview", "u": ["fh": used, "sd": 35]]
+            ]]
+            store.planUsage = PlanUsage.decode(try JSONSerialization.data(withJSONObject: sample))
+        }
+        if let index = CommandLine.arguments.firstIndex(of: "--status-output") {
+            let image = StatusQuotaImage.make(store.planUsage)
+            guard let tiff = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff) else {
+                preconditionFailure("Unable to render menu bar quota image")
+            }
+            try bitmap.representation(using: .png, properties: [:])!.write(
+                to: URL(fileURLWithPath: CommandLine.arguments[index + 1]))
+        }
         let layout = PopoverLayout()
         if CommandLine.arguments.count > 3, let height = Double(CommandLine.arguments[3]) {
             layout.size = PopoverGeometry.contentSize(in: NSRect(x: 0, y: 0, width: 1024, height: height))

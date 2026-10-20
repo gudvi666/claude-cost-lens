@@ -9,6 +9,7 @@ final class UsageStore: ObservableObject {
     @Published var isStarting = false
     @Published var error: String?
     @Published var updatedAt: Date?
+    @Published var planUsage = PlanUsage.missing
     @Published var showTokens = UserDefaults.standard.bool(forKey: "showTokens") {
         didSet {
             UserDefaults.standard.set(showTokens, forKey: "showTokens")
@@ -20,16 +21,31 @@ final class UsageStore: ObservableObject {
     private var backend: Process?
     private var output: Pipe?
     private var timer: Timer?
+    private var planTimer: Timer?
     private var buffer = ""
     private var stopping = false
+    private let planUsageReader: () -> PlanUsage
+
+    init(planUsageReader: @escaping () -> PlanUsage = { PlanUsage.read() }) {
+        self.planUsageReader = planUsageReader
+    }
 
     var busy: Bool { isRefreshing || isStarting }
 
     func start() {
+        refreshPlanUsage()
         startBackend()
         timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refresh() }
         }
+        planTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.refreshPlanUsage() }
+        }
+    }
+
+    func refreshPlanUsage() {
+        planUsage = planUsageReader()
+        didUpdate?()
     }
 
     private func python() -> URL? {
@@ -134,6 +150,7 @@ final class UsageStore: ObservableObject {
     }
 
     func refresh() {
+        refreshPlanUsage()
         guard !busy else { return }
         guard let base = serverURL else { startBackend(); return }
         isRefreshing = true
@@ -164,6 +181,7 @@ final class UsageStore: ObservableObject {
     func stop() {
         stopping = true
         timer?.invalidate()
+        planTimer?.invalidate()
         output?.fileHandleForReading.readabilityHandler = nil
         if backend?.isRunning == true { backend?.terminate() }
     }
@@ -172,26 +190,107 @@ final class UsageStore: ObservableObject {
 private let accent = Color(red: 0.57, green: 0.64, blue: 1)
 private let muted = Color(red: 0.58, green: 0.64, blue: 0.75)
 private let gold = Color(red: 1, green: 0.79, blue: 0.47)
+private let fiveHourColor = Color(red: 0.32, green: 0.81, blue: 0.96)
+private let sevenDayColor = Color(red: 0.72, green: 0.62, blue: 1)
+
+struct QuotaRing: View {
+    let window: PlanUsage.Window
+    let color: Color
+
+    var body: some View {
+        ZStack {
+            Circle().stroke(window.remaining == nil ? Color.white : color.opacity(0.18), lineWidth: 3)
+            if window.remaining != nil, window.ringFraction > 0 {
+                Circle().trim(from: 0, to: window.ringFraction)
+                    .stroke(color, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+            }
+            Text(window.remaining == nil ? "-" : window.remainingText)
+                .font(.system(size: 11, weight: .semibold, design: .rounded)).monospacedDigit()
+                .foregroundStyle(Color.white)
+        }
+        .frame(width: 42, height: 42)
+        .accessibilityLabel(window.remaining.map { "剩余 \(Int($0.rounded()))%" } ?? "暂无数据")
+    }
+}
+
+// Use a non-template image so AppKit preserves both quota colors. The original
+// cost/Token title remains separate and visible beside the two rings.
+@MainActor
+enum StatusQuotaImage {
+    static func make(_ usage: PlanUsage, now: Date = Date()) -> NSImage {
+        let windows = [usage.fiveHour(now: now), usage.sevenDay(now: now)]
+        let colors = [NSColor(calibratedRed: 0.32, green: 0.81, blue: 0.96, alpha: 1),
+                      NSColor(calibratedRed: 0.72, green: 0.62, blue: 1, alpha: 1)]
+        let image = NSImage(size: NSSize(width: 48, height: 22), flipped: false) { _ in
+            for (index, window) in windows.enumerated() {
+                let center = NSPoint(x: 11 + CGFloat(index) * 26, y: 11)
+                let bounds = NSRect(x: center.x - 9.5, y: 1.5, width: 19, height: 19)
+                let color = window.remaining == nil ? NSColor.white : colors[index]
+                (window.remaining == nil ? color : color.withAlphaComponent(0.22)).setStroke()
+                let track = NSBezierPath(ovalIn: bounds)
+                track.lineWidth = 1.7
+                track.stroke()
+                if window.remaining != nil, window.ringFraction > 0 {
+                    let arc = NSBezierPath()
+                    if window.ringFraction == 1 { arc.appendOval(in: bounds) }
+                    else {
+                        arc.appendArc(withCenter: center, radius: 9.5, startAngle: 90,
+                                      endAngle: 90 - CGFloat(360 * window.ringFraction), clockwise: true)
+                    }
+                    arc.lineWidth = 1.7
+                    arc.lineCapStyle = .round
+                    color.setStroke()
+                    arc.stroke()
+                }
+                let number = NSAttributedString(string: window.number, attributes: [
+                    .font: NSFont.monospacedDigitSystemFont(ofSize: 8.5, weight: .semibold),
+                    .foregroundColor: window.remaining == nil ? NSColor.white : NSColor.labelColor
+                ])
+                let size = number.size()
+                number.draw(at: NSPoint(x: center.x - size.width / 2, y: center.y - size.height / 2))
+            }
+            return true
+        }
+        image.isTemplate = false
+        image.accessibilityDescription = "五小时和周额度剩余百分比"
+        return image
+    }
+}
 
 // All geometry uses screen points, including screens with a negative origin.
 enum PopoverGeometry {
     static func contentSize(in visibleFrame: NSRect) -> NSSize {
         NSSize(width: min(408, max(1, visibleFrame.width - 32)),
-               height: min(820, max(1, visibleFrame.height - 48)))
+               height: min(920, max(1, visibleFrame.height - 48)))
     }
 
-    static func constrainedFrame(_ frame: NSRect, in visibleFrame: NSRect) -> NSRect {
-        let safe = visibleFrame.insetBy(dx: 8, dy: 8)
-        var result = frame
-        result.origin.x = min(max(frame.minX, safe.minX), max(safe.minX, safe.maxX - frame.width))
-        result.origin.y = min(max(frame.minY, safe.minY), max(safe.minY, safe.maxY - frame.height))
-        return result
-    }
 }
 
 @MainActor
 final class PopoverLayout: ObservableObject {
-    @Published var size = NSSize(width: 408, height: 820)
+    @Published var size = NSSize(width: 408, height: 920)
+}
+
+@MainActor
+enum PopoverPresentation {
+    static func show(_ popover: NSPopover, relativeTo anchor: NSView,
+                     layout: PopoverLayout, visibleFrame: NSRect) {
+        // Finalize the content size before AppKit calculates the arrow and
+        // screen placement. Never clamp the window after it becomes visible:
+        // its arrow may overlap the menu bar above screen.visibleFrame.
+        let size = PopoverGeometry.contentSize(in: visibleFrame)
+        if layout.size != size { layout.size = size }
+        popover.animates = true
+        if let host = popover.contentViewController {
+            host.preferredContentSize = size
+            host.view.setFrameSize(size)
+            host.view.layoutSubtreeIfNeeded()
+        }
+        popover.contentSize = size
+        NSApp.activate(ignoringOtherApps: true)
+        popover.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .minY)
+    }
 }
 
 struct UsagePopover: View {
@@ -212,6 +311,7 @@ struct UsagePopover: View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 14) {
                 header
+                quotaSection
                 Picker("时间范围", selection: $range) {
                     Text("今天").tag(1)
                     Text("近 7 天").tag(7)
@@ -283,6 +383,39 @@ struct UsagePopover: View {
             }
             .menuStyle(.borderlessButton).fixedSize()
         }
+    }
+
+    private var quotaSection: some View {
+        let usage = store.planUsage
+        let now = Date()
+        return VStack(alignment: .leading, spacing: 9) {
+            HStack(spacing: 10) {
+                quotaCard("五小时剩余", window: usage.fiveHour(now: now), color: fiveHourColor)
+                quotaCard("周额度剩余", window: usage.sevenDay(now: now), color: sevenDayColor)
+            }
+            HStack(spacing: 4) {
+                Text(usage.note(now: now)).lineLimit(1).minimumScaleFactor(0.8)
+                Spacer(minLength: 2)
+                if let date = usage.sampledAt {
+                    Text(date.formatted(.dateTime.month().day().hour().minute())).monospacedDigit()
+                }
+            }
+            .font(.system(size: 9)).foregroundStyle(muted)
+            .help("只读 Claude 桌面端的额度历史文件；数字和圆环均表示最近记录的剩余百分比。长时间未更新仍保留快照，只有文件缺失、不可读或数据无效时显示白色闭环和 -。文件未记录准确重置时间。")
+        }
+    }
+
+    private func quotaCard(_ title: String, window: PlanUsage.Window, color: Color) -> some View {
+        HStack(spacing: 10) {
+            QuotaRing(window: window, color: color)
+            VStack(alignment: .leading, spacing: 5) {
+                Text(title).font(.system(size: 11, weight: .medium))
+                Text("已用 \(window.usedText)").font(.system(size: 10)).foregroundStyle(muted)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(11).frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 12))
     }
 
     private var hero: some View {
@@ -415,7 +548,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         terminationSignal = termination
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = item.button {
-            button.image = NSImage(systemSymbolName: "chart.bar.xaxis", accessibilityDescription: "Claude 用量")
+            button.image = StatusQuotaImage.make(store.planUsage)
             button.imagePosition = .imageLeading
             button.font = .monospacedDigitSystemFont(ofSize: 12, weight: .medium)
             button.title = " …"
@@ -441,29 +574,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     }
 
     private func updateStatus() {
+        let usage = store.planUsage
+        let now = Date()
+        item.button?.image = StatusQuotaImage.make(usage, now: now)
+        let quotaTip = "五小时剩余：\(usage.fiveHour(now: now).remainingText)（青色）\n周额度剩余：\(usage.sevenDay(now: now).remainingText)（紫色）\n\(usage.note(now: now))"
         guard let snapshot = store.snapshot else {
             item.button?.title = store.error == nil ? " …" : " !"
-            item.button?.toolTip = store.error ?? "正在读取 Claude 用量"
+            item.button?.toolTip = quotaTip + "\n" + (store.error ?? "正在读取 Claude 用量")
             return
         }
         let today = snapshot.metrics(days: 1)
         item.button?.title = " " + (store.showTokens ? UsageFormat.tokens(today.tokens.total) : today.costText)
-        item.button?.toolTip = "今日费用合计：\(today.costText)\n原生：\(UsageFormat.money(today.nativeCost))；API 估算：\(UsageFormat.money(today.estimatedCost))\n今日 Token：\(UsageFormat.tokens(today.tokens.total))（含 Advisor）" + (store.error == nil ? "" : "\n刷新失败，当前为上次数据")
+        item.button?.toolTip = quotaTip + "\n今日费用合计：\(today.costText)\n原生：\(UsageFormat.money(today.nativeCost))；API 估算：\(UsageFormat.money(today.estimatedCost))\n今日 Token：\(UsageFormat.tokens(today.tokens.total))（含 Advisor）" + (store.error == nil ? "" : "\n刷新失败，当前为上次数据")
+        item.button?.setAccessibilityLabel("Claude Cost Lens，" + quotaTip + "，今日消耗 " + (store.showTokens ? UsageFormat.tokens(today.tokens.total) + " Token" : today.costText))
     }
 
     @objc private func togglePopover() {
         guard let button = item.button else { return }
         if popover.isShown { popover.performClose(nil) }
         else {
+            store.refreshPlanUsage()
             let screen = button.window?.screen ?? NSScreen.main
             if let screen {
-                layout.size = PopoverGeometry.contentSize(in: screen.visibleFrame)
-                popover.contentViewController?.preferredContentSize = layout.size
-                popover.contentViewController?.view.setFrameSize(layout.size)
-                popover.contentSize = layout.size
+                PopoverPresentation.show(popover, relativeTo: button, layout: layout,
+                                         visibleFrame: screen.visibleFrame)
             }
-            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-            NSApp.activate(ignoringOtherApps: true)
         }
     }
 
@@ -485,12 +620,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         ) { [weak self] _ in
             self?.closePopover()
         }
-        guard let window = popover.contentViewController?.view.window,
-              let screen = item.button?.window?.screen ?? window.screen else { return }
-        // AppKit chooses the arrow placement; keep the resulting outer frame
-        // inside this display's usable area, including popover chrome.
-        let frame = PopoverGeometry.constrainedFrame(window.frame, in: screen.visibleFrame)
-        if frame.origin != window.frame.origin { window.setFrameOrigin(frame.origin) }
     }
 
     private func removeOutsideClickMonitor() {

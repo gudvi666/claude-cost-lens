@@ -6,8 +6,8 @@ enum PopoverLayoutTests {
     @MainActor static func main() {
         NSApplication.shared.setActivationPolicy(.prohibited)
         let store = UsageStore()
-        // Cover a laptop, a short usable display, and a second display whose
-        // desktop coordinates are negative. Include the popover arrow/border.
+        // Size before presentation, leaving room for AppKit's arrow/border on
+        // short displays and displays whose desktop coordinates are negative.
         let screens = [
             NSRect(x: 0, y: 90, width: 2560, height: 1320),
             NSRect(x: 0, y: 40, width: 1024, height: 560),
@@ -17,10 +17,9 @@ enum PopoverLayoutTests {
         for screen in screens {
             let layout = PopoverLayout()
             layout.size = PopoverGeometry.contentSize(in: screen)
-            let outer = NSRect(x: screen.maxX - 180, y: screen.maxY - 100,
-                               width: layout.size.width + 4, height: layout.size.height + 24)
-            let fitted = PopoverGeometry.constrainedFrame(outer, in: screen)
-            precondition(screen.insetBy(dx: 8, dy: 8).contains(fitted), "Outer popover clips the display: \(screen)")
+            precondition(layout.size.width + 16 <= screen.width)
+            precondition(layout.size.height + 32 <= screen.height,
+                         "Content must reserve space for native popover chrome")
             let host = NSHostingController(rootView: UsagePopover(store: store, layout: layout))
             host.sizingOptions = []
             let window = NSWindow(contentRect: NSRect(origin: .zero, size: layout.size),
@@ -31,7 +30,7 @@ enum PopoverLayoutTests {
             RunLoop.current.run(until: Date().addingTimeInterval(0.05))
             precondition(host.view.bounds.size == layout.size, "SwiftUI changed constrained content size")
             precondition(window.contentMinSize.height <= layout.size.height, "Host minimum forces content off screen")
-            print("PASS display \(screen) → content \(layout.size), outer \(fitted)")
+            print("PASS display \(screen) → content \(layout.size)")
         }
     }
 }
